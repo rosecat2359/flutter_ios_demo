@@ -50,14 +50,13 @@ jobs:
 
       - name: Build iOS release archive without signing
         # `flutter build ipa --no-codesign` produces build/ios/archive/Runner.xcarchive
-        # and deliberately skips the .ipa step, which needs signing. There are no
-        # certificates and no secrets in this workflow, so signing is disabled hard:
-        # any attempt to sign must fail loudly instead of picking something up from
-        # the runner.
-        env:
-          CODE_SIGNING_ALLOWED: "NO"
-          CODE_SIGNING_REQUIRED: "NO"
-          EXPANDED_CODE_SIGN_IDENTITY: ""
+        # and deliberately skips the .ipa step, which needs signing.
+        #
+        # Signing is not configured anywhere in this workflow: there are no
+        # certificates and no secrets. Flutter passes CODE_SIGNING_ALLOWED=NO,
+        # CODE_SIGNING_REQUIRED=NO and CODE_SIGNING_IDENTITY="" to xcodebuild
+        # itself, and the verification step below asserts the bundle stayed
+        # unsigned, so an accidental signing pass would fail loudly.
         run: flutter build ipa --release --no-codesign
 
       - name: Verify the archive exists and is well formed
