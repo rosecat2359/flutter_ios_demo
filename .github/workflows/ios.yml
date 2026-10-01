@@ -48,70 +48,38 @@ jobs:
       - name: Unit and widget tests
         run: flutter test --reporter expanded
 
-      - name: Build iOS for a device without signing
-        # Code signing is disabled hard for this step: there are no certificates
-        # and no secrets in this workflow, so any attempt to sign must fail loudly
-        # rather than silently pick something up from the runner.
+      - name: Build iOS release archive without signing
+        # `flutter build ipa --no-codesign` produces build/ios/archive/Runner.xcarchive
+        # and deliberately skips the .ipa step, which needs signing. There are no
+        # certificates and no secrets in this workflow, so signing is disabled hard:
+        # any attempt to sign must fail loudly instead of picking something up from
+        # the runner.
         env:
           CODE_SIGNING_ALLOWED: "NO"
           CODE_SIGNING_REQUIRED: "NO"
           EXPANDED_CODE_SIGN_IDENTITY: ""
-        run: flutter build ios --release --no-codesign
+        run: flutter build ipa --release --no-codesign
 
-      - name: Export an unsigned .ipa from the archive
-        # This is the only step whose behaviour varies with the Flutter/Xcode
-        # versions, so it is allowed to warn instead of failing the release
-        # build; the .xcarchive below is uploaded either way.
-        continue-on-error: true
+      - name: Verify the archive exists and is well formed
         run: |
           set -euo pipefail
           ARCHIVE="build/ios/archive/Runner.xcarchive"
           test -d "$ARCHIVE"
+          du -sh "$ARCHIVE"
+          test -f "$ARCHIVE/Info.plist"
+          APP="$ARCHIVE/Products/Applications/Runner.app"
+          test -d "$APP"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist"
+          codesign -dv "$APP" 2>&1 || echo "expected: bundle is unsigned"
 
-          cat > "$RUNNER_TEMP/ExportOptions.plist" <<'PLIST'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key>
-            <string>development</string>
-            <key>signingStyle</key>
-            <string>manual</string>
-            <key>teamID</key>
-            <string></string>
-            <key>stripSwiftSymbols</key>
-            <true/>
-            <key>compileBitcode</key>
-            <false/>
-          </dict>
-          </plist>
-          PLIST
-
-          mkdir -p build/ios/unsigned-ipa
-          xcodebuild -exportArchive \
-            -archivePath "$ARCHIVE" \
-            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
-            -exportPath build/ios/unsigned-ipa
-
-      - name: Check what was produced
-        if: always()
-        run: |
-          set -euo pipefail
-          echo "--- ios build tree ---"
-          find build/ios -maxdepth 2 -print 2>/dev/null || true
-          du -sh build/ios 2>/dev/null || true
-
-      - name: Upload unsigned archive and .ipa
-        if: always()
+      - name: Upload the unsigned archive
         uses: actions/upload-artifact@v4
         with:
           name: ios-unsigned-archive
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
-          path: |
-            build/ios/archive/Runner.xcarchive
-            build/ios/ipa/*.ipa
-            build/ios/unsigned-ipa/*.ipa
+          path: build/ios/archive/Runner.xcarchive
 
   build-simulator:
     name: build iOS simulator app

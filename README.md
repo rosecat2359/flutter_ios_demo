@@ -3,7 +3,7 @@
 一个最小的 Flutter **iOS** 示例应用（单屏待办清单），用于先把「本地开发 → Git → GitHub Actions 云端构建 iOS」这条链路跑通。
 
 - 应用逻辑只有内存状态：不依赖任何第三方包、不联网、不需要 iOS 权限，因此首次构建风险最低。
-- iOS 构建**不需要 Apple 开发者账号**：CI 产出未签名的 `.xcarchive` / `.ipa` 与模拟器版 `Runner.app`。
+- iOS 构建**不需要 Apple 开发者账号**：CI 产出未签名的 `Runner.xcarchive` 与模拟器版 `Runner.app`。
 
 ## 目录
 
@@ -51,13 +51,15 @@ flutter test
 
 | Job | 运行环境 | 内容 |
 | --- | --- | --- |
-| `build-ios` | `macos-15`（Xcode 16.4） | `pub get` → `doctor -v` → `analyze` → `test` → `flutter build ios --release --no-codesign` → 从 archive 导出未签名 ipa |
+| `build-ios` | `macos-15`（Xcode 16.4） | `pub get` → `doctor -v` → `analyze` → `test` → `flutter build ipa --release --no-codesign`（产出 `Runner.xcarchive`）→ 校验归档结构 |
 | `build-simulator` | `macos-15` | `flutter build ios --debug --simulator`，产出可装进模拟器的 `Runner.app` |
 
 产物（Artifacts，保留 14 天）：
 
-- `ios-unsigned-archive`：`Runner.xcarchive`（未签名真机归档）+ 导出的 `.ipa`
+- `ios-unsigned-archive`：`Runner.xcarchive`（未签名真机归档）
 - `ios-simulator-app`：`Runner.app`（iOS Simulator 版本）
+
+> Flutter 3.47 起 `flutter build ipa` 就是归档命令（别名 `xcarchive`），输出到 `build/ios/archive/Runner.xcarchive`。加 `--no-codesign` 时 Flutter 会**保留归档、显式跳过 ipa 生成**（ipa 步骤依赖签名），所以本流水线不产出 `.ipa`。
 
 工作流中不引用任何 Secret。`macos-15` 是刻意固定的：`macos-latest` 已迁到 macOS 26，工具链会漂移。
 
@@ -68,8 +70,8 @@ flutter test
 3. 本地校验产物（无需 Mac）：
 
    ```bash
-   unzip -l ios-unsigned-archive.zip        # 应含 Runner.xcarchive/ 与 *.ipa
-   unzip -l ios-simulator-app.zip           # 应含 Runner.app/Info.plist 等
+   unzip -l ios-unsigned-archive.zip   # 应含 Runner.xcarchive/Info.plist 与 Products/Applications/Runner.app
+   unzip -l ios-simulator-app.zip      # 应含 Runner.app/Info.plist 等
    ```
 
 模拟器包可在 Mac 上运行验证：
@@ -80,9 +82,9 @@ xcrun simctl install booted Runner.app
 xcrun simctl launch booted com.example.flutterIosDemo
 ```
 
-## 限制：未签名包不能装到真机
+## 限制：未签名归档不能装到真机
 
-未签名的 `.ipa` / `.xcarchive` 无法安装到真实 iPhone，也不会上架或走 TestFlight。它可以证明 iOS 代码真实编译链接通过，并作为后续签名的输入。
+`Runner.xcarchive` 是未签名的，无法安装到真实 iPhone，也不会上架或走 TestFlight。它能证明 iOS 代码真实编译链接通过，并作为后续签名的输入。
 
 要产出**可安装**的 ipa，需要付费 Apple 开发者账号（$99/年），在仓库 Secrets 中加入：
 
@@ -94,7 +96,7 @@ xcrun simctl launch booted com.example.flutterIosDemo
 | `KEYCHAIN_PASSWORD` | CI 上临时钥匙串的任意密码 |
 | `APPLE_TEAM_ID` | 10 位 Team ID |
 
-然后在 `build-ios` 中去掉 `--no-codesign`，并增加：导入证书到临时钥匙串 → 安装 provisioning profile 到 `~/Library/MobileDevice/Provisioning Profiles` → `flutter build ipa --release --export-method development`（或 `ad-hoc` / `app-store`）。参考 [Flutter iOS 部署文档](https://docs.flutter.dev/deployment/ios)。
+然后在 `build-ios` 中**去掉 `--no-codesign`**（Flutter 只有在允许签名时才会执行 ipa 步骤），并增加：导入证书到临时钥匙串 → 安装 provisioning profile 到 `~/Library/MobileDevice/Provisioning Profiles` → `flutter build ipa --release --export-method development`（或 `ad-hoc` / `app-store`）。参考 [Flutter iOS 部署文档](https://docs.flutter.dev/deployment/ios)。
 
 ## 版本
 
