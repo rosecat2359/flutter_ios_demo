@@ -72,6 +72,53 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist"
           codesign -dv "$APP" 2>&1 || echo "expected: bundle is unsigned"
 
+      - name: Package an unsigned .ipa from the archive
+        # Flutter skips its own .ipa step under --no-codesign because
+        # `xcodebuild -exportArchive` requires a signing identity, so the IPA is
+        # assembled here instead. An IPA is a zip with Payload/<App>.app at the
+        # root; repacking an already-built app bundle needs neither xcodebuild
+        # nor any certificate.
+        #
+        # The result is a genuine, structurally valid IPA whose code is not
+        # signed: it is input for a signing step (codesign + a provisioning
+        # profile), not something iOS will install as-is. That is asserted below
+        # with `unzip -t` plus a check that the app bundle carries no signature.
+        run: |
+          set -euo pipefail
+          APP="build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app"
+          test -d "$APP"
+
+          STAGE="$RUNNER_TEMP/ipa-stage"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE/Payload"
+          # -a preserves permissions and extended attributes, which a re-signing
+          # step relies on.
+          cp -a "$APP" "$STAGE/Payload/Runner.app"
+
+          mkdir -p build/ios/ipa
+          rm -f build/ios/ipa/Runner-unsigned.ipa
+          ( cd "$STAGE" && zip -qry "$GITHUB_WORKSPACE/build/ios/ipa/Runner-unsigned.ipa" Payload )
+
+          IPA="build/ios/ipa/Runner-unsigned.ipa"
+          du -sh "$IPA"
+          unzip -t "$IPA" >/dev/null
+          echo "IPA structure:"
+          unzip -l "$IPA" | head -5
+
+          # Only the root app bundle must be unsigned. The nested engine
+          # frameworks keep Apple's own signatures, which is how the Flutter
+          # engine ships and is not something this workflow controls.
+          test -f "$STAGE/Payload/Runner.app/Info.plist"
+          if [ -d "$STAGE/Payload/Runner.app/_CodeSignature" ]; then
+            echo "::error::Runner.app unexpectedly carries a signature"
+            exit 1
+          fi
+          if [ -f "$STAGE/Payload/Runner.app/embedded.mobileprovision" ]; then
+            echo "::error::Runner.app unexpectedly carries a provisioning profile"
+            exit 1
+          fi
+          echo "confirmed: Payload/Runner.app is present and unsigned"
+
       - name: Upload the unsigned archive
         uses: actions/upload-artifact@v4
         with:
@@ -79,6 +126,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: build/ios/archive/Runner.xcarchive
+
+      - name: Upload the unsigned .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned-ipa
+          if-no-files-found: error
+          retention-days: 14
+          path: build/ios/ipa/Runner-unsigned.ipa
 
   build-simulator:
     name: build iOS simulator app

@@ -51,25 +51,46 @@ flutter test
 
 | Job | 运行环境 | 内容 |
 | --- | --- | --- |
-| `build-ios` | `macos-15`（Xcode 16.4） | `pub get` → `doctor -v` → `analyze` → `test` → `flutter build ipa --release --no-codesign`（产出 `Runner.xcarchive`）→ 校验归档结构 |
+| `build-ios` | `macos-15`（Xcode 16.4） | `pub get` → `doctor -v` → `analyze` → `test` → `flutter build ipa --release --no-codesign`（产出 `Runner.xcarchive`）→ 校验归档 → 打成 `Runner-unsigned.ipa` |
 | `build-simulator` | `macos-15` | `flutter build ios --debug --simulator`，产出可装进模拟器的 `Runner.app` |
 
 产物（Artifacts，保留 14 天）：
 
-- `ios-unsigned-archive`：`Runner.xcarchive`（未签名真机归档）
+- `ios-unsigned-ipa`：`Runner-unsigned.ipa` —— 标准 `Payload/Runner.app` 结构的**未签名 IPA**，用于你自己的签名流程
+- `ios-unsigned-archive`：`Runner.xcarchive`（含 dSYM，用于崩溃符号化）
 - `ios-simulator-app`：`Runner.app`（iOS Simulator 版本）
 
-> Flutter 3.47 起 `flutter build ipa` 就是归档命令（别名 `xcarchive`），输出到 `build/ios/archive/Runner.xcarchive`。加 `--no-codesign` 时 Flutter 会**保留归档、显式跳过 ipa 生成**（ipa 步骤依赖签名），所以本流水线不产出 `.ipa`。
+### 关于未签名 IPA
+
+Flutter 在 `--no-codesign` 下会跳过自己的 ipa 步骤，因为 `xcodebuild -exportArchive` 强制要求签名身份。因此工作流直接按 IPA 规范打包：把 `.xcarchive` 里的 `Runner.app` 放进 `Payload/` 再打成 zip。这一步不需要 Xcode，也不需要证书。
+
+产物是**结构合法、代码未签名**的 IPA，定位是**签名流程的输入**，不是能直接安装的包：
+
+```bash
+unzip -l Runner-unsigned.ipa    # 顶层应为 Payload/Runner.app/...
+unzip -t Runner-unsigned.ipa    # CRC 校验
+
+# 自行签名
+unzip -q Runner-unsigned.ipa
+cp your.mobileprovision Payload/Runner.app/embedded.mobileprovision
+codesign -f -s "Apple Development: you@example.com" --entitlements ent.plist \
+  Payload/Runner.app/Frameworks/App.framework Payload/Runner.app/Frameworks/Flutter.framework
+codesign -f -s "Apple Development: you@example.com" --entitlements ent.plist Payload/Runner.app
+zip -qry resigned.ipa Payload
+```
+
+> `Payload/Runner.app` 本体未签名，但其内的 `App.framework` / `Flutter.framework` 保留 Apple 自己的签名——这是 Flutter 引擎的发布方式，重签时按需覆盖即可。
 
 工作流中不引用任何 Secret。`macos-15` 是刻意固定的：`macos-latest` 已迁到 macOS 26，工具链会漂移。
 
 ## 如何验证构建结果
 
 1. 打开仓库的 **Actions** 标签，进入 `ios` 工作流最近一次运行，确认两个 job 均为绿色。
-2. 在该次运行的页面底部 **Artifacts** 处下载 `ios-unsigned-archive` 与 `ios-simulator-app`。
+2. 在该次运行的页面底部 **Artifacts** 处下载 `ios-unsigned-ipa`、`ios-unsigned-archive` 与 `ios-simulator-app`。
 3. 本地校验产物（无需 Mac）：
 
    ```bash
+   unzip -l ios-unsigned-ipa.zip       # 应含 Runner-unsigned.ipa
    unzip -l ios-unsigned-archive.zip   # 应含 Runner.xcarchive/Info.plist 与 Products/Applications/Runner.app
    unzip -l ios-simulator-app.zip      # 应含 Runner.app/Info.plist 等
    ```
